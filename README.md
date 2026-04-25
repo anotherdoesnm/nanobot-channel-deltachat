@@ -1,43 +1,43 @@
-# nanobot-channel-deltachat
+**nanobot-channel-deltachat**
 
-Плагин канала для [nanobot](https://github.com/HKUDS/nanobot), позволяющий общаться с вашим AI-агентом через [Delta Chat](https://delta.chat/). 
+A channel plugin for [nanobot](https://github.com/HKUDS/nanobot) that lets you chat with your AI agent through [Delta Chat](https://delta.chat/).
 
-Использует электронную почту как транспорт: полная конфиденциальность, отсутствие привязки к конкретному мессенджеру и децентрализация.
+Uses email as transport: full privacy, no lock-in to a specific messenger, and decentralization.
 
-## 📋 Возможности
+## 📋 Features
 
-*   Прием и отправка текстовых сообщений.
-*   Полная поддержка архитектуры плагинов nanobot (Pydantic конфигурация, `allow_from`).
-*   Корректная работа с асинхронным event loop nanobot.
-*   Поддержка никнеймов ботов.
+- Sending and receiving text messages.
+- Full support for nanobot's plugin architecture (Pydantic configuration, `allow_from`).
+- Proper integration with nanobot's async event loop.
+- Bot nickname support.
 
-## 📦 Зависимости
+## 📦 Dependencies
 
 ```bash
 pip install deltachat-rpc-server deltachat-rpc-client
 ```
 
-## 🚀 Установка
+## 🚀 Installation
 
-1. Клонируйте репозиторий:
+1. Clone the repository:
    ```bash
    git clone https://github.com/your-username/nanobot-channel-deltachat.git
    cd nanobot-channel-deltachat
    ```
 
-2. Установите плагин в режиме разработки:
+2. Install the plugin in development mode:
    ```bash
    pip install -e .
    ```
 
-3. Проверьте, что nanobot видит плагин:
+3. Verify that nanobot sees the plugin:
    ```bash
    nanobot plugins list
    ```
 
-## ⚙️ Настройка
+## ⚙️ Configuration
 
-Добавьте блок в `~/.nanobot/config.json`:
+Add the following block to `~/.nanobot/config.json`:
 
 ```json
 {
@@ -54,27 +54,28 @@ pip install deltachat-rpc-server deltachat-rpc-client
 }
 ```
 
-*Используйте пароль приложения (App Password), а не основной пароль от почты.*
+*Use an App Password, not your main email password.*
 
-## 🏃 Запуск
+## 🏃 Running
 
-1. Запустите шлюз:
+1. Start the gateway:
    ```bash
    nanobot gateway
    ```
 
-2. В логах появится ссылка:
+2. An invite link will appear in the logs:
    ```
-   📋 Ссылка-приглашение для бота: https://i.delta.chat/#...
+   📋 Bot invite link: https://i.delta.chat/#...
    ```
 
-3. Скопируйте её и вставьте в Delta Chat через **"Новый контакт" -> "Приглашение по ссылке"**. 
-   > *Примечание: не перезапускайте бота до того, как добавите его по ссылке, иначе ссылка станет недействительной.*
+3. Copy it and paste into Delta Chat via **"New contact" → "Invite by link"**.
 
-## 🛠 Разработка
+> *Note: Don't restart the bot before adding it via the invite link, otherwise the link will become invalid.*
 
-Благодаря флагу `-e` изменения в коде применяются сразу после перезапуска `nanobot gateway`. Переустановка требуется только при изменении `pyproject.toml`.
+## 🛠 Development
+
+Thanks to the `-e` flag, code changes take effect immediately after restarting `nanobot gateway`. Reinstallation is only needed when modifying `pyproject.toml`.
 
 ---
 
-*Спасибо Zhipu.AI и GLM.*
+*Thanks to Zhipu.AI and GLM.*
