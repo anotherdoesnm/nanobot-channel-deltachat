@@ -2,7 +2,7 @@
 [project]
 name = "nanobot-channel-deltachat"
 version = "0.1.0"
-dependencies = ["nanobot-ai","deltachat-rpc-client"]
+dependencies = ["nanobot-ai","deltachat-rpc-client","deltachat-rpc-server"]
 
 [project.entry-points."nanobot.channels"]
 deltachat = "nanobot_channel_deltachat:DeltaChatChannel"

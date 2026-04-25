@@ -32,7 +32,7 @@ class DeltaChatChannel(BaseChannel):
 
         self._rpc: Optional[Rpc] = None
         self._dc: Optional[DeltaChat] = None
-        self._account = None 
+        self._account = None
         self._account_id: Optional[int] = None
         self._running = False
 
@@ -48,18 +48,22 @@ class DeltaChatChannel(BaseChannel):
             raise ValueError("Отсутствуют учетные данные DeltaChat")
 
         try:
-            self._rpc = Rpc(accounts_dir=os.path.expanduser(self.config.db_dir))
+
+            # Create RPC with explicit executable path
+            self._rpc = Rpc(
+                accounts_dir=os.path.expanduser(self.config.db_dir)
+            )
+            
+            # Start the RPC server
             self._rpc.start()
             self._dc = DeltaChat(self._rpc)
 
             accounts = self._dc.get_all_accounts()
-            if accounts:
-                self._account = accounts[0] 
-            else:
+            self._account = self._select_account(accounts)
+            if self._account is None:
                 self._account = self._dc.add_account()
 
-            self._account_id = self._account.id 
-                        # 3. Настраиваем аккаунт
+            self._account_id = self._account.id
             if not self._account.is_configured():
                 self._account.set_config("addr", self.config.email)
                 self._account.set_config("mail_pw", self.config.password)
@@ -67,11 +71,13 @@ class DeltaChatChannel(BaseChannel):
                 if self.config.display_name:
                     self._account.set_config("displayname", self.config.display_name)
                 self._account.configure()
-            
-            # Запускаем I/O и ждем полного подключения (включая настройку Mvbox)
+
             self._account.bring_online()
-            invite_link = self._account.get_qr_code()
-            logger.info(f"📋 Ссылка-приглашение для бота: {invite_link}")
+            try:
+                invite_link = self._account.get_qr_code()
+                logger.info(f"Ссылка-приглашение для бота: {invite_link}")
+            except Exception as qr_err:
+                logger.warning(f"Не удалось получить invite-ссылку: {qr_err}")
             logger.info(f"Аккаунт {self.config.email} успешно настроен")
             await self._start_event_loop()
 
@@ -79,15 +85,39 @@ class DeltaChatChannel(BaseChannel):
             logger.error(f"Ошибка при запуске DeltaChat канала: {e}")
             raise
         finally:
+            self._running = False
+            # Clean up RPC connection
             if self._rpc:
                 self._rpc.close()
+                self._rpc = None
+            self._dc = None
+            self._account = None
+            self._account_id = None
+
+    def _select_account(self, accounts: list[Any]) -> Optional[Any]:
+        if not accounts:
+            return None
+        for account in accounts:
+            try:
+                if account.get_config("addr") == self.config.email:
+                    return account
+            except Exception:
+                continue
+        return accounts[0]
+
+    @staticmethod
+    def _event_value(event: Any, key: str, default: Any = None) -> Any:
+        if isinstance(event, dict):
+            return event.get(key, default)
+        return getattr(event, key, default)
 
     async def _start_event_loop(self) -> None:
         """Вечный цикл событий."""
         while self._running:
             try:
-                # 1. wait_for_event - метод Account
-                # 2. Он возвращает ОДНО событие, а не список (убрали for)
+                if self._account is None:
+                    logger.warning("DeltaChat аккаунт не инициализирован, завершаем event loop")
+                    break
                 event = await asyncio.to_thread(self._account.wait_for_event)
                 await self._handle_event(event)
             except asyncio.CancelledError:
@@ -97,14 +127,19 @@ class DeltaChatChannel(BaseChannel):
                 await asyncio.sleep(5)
 
     async def _handle_event(self, event) -> None:
-        if event["kind"] == EventType.INCOMING_MSG:
-            msg_id = event["msg_id"]
+        kind = self._event_value(event, "kind")
+        if kind == EventType.INCOMING_MSG:
+            msg_id = self._event_value(event, "msg_id")
+            if msg_id is None:
+                logger.warning(f"INCOMING_MSG без msg_id: {event}")
+                return
+            if self._account is None:
+                logger.warning("Получено входящее сообщение до инициализации аккаунта")
+                return
 
-            # get_message_by_id - метод Account (не DeltaChat)
             message = self._account.get_message_by_id(msg_id)
             snapshot = message.get_snapshot()
 
-            # Пропускаем системные сообщения (например, "контакт добавлен")
             if snapshot.is_info:
                 return
 
@@ -114,20 +149,22 @@ class DeltaChatChannel(BaseChannel):
                 content=snapshot.text or "",
                 media=[],
             )
-        elif event['kind'] == EventType.INFO:
-           logger.info(event['msg'])
-        elif event['kind'] == EventType.WARNING:
-           logger.warning(event['msg'])
-        elif event['kind'] == EventType.ERROR:
-           logger.error(event['msg'])
+        elif kind == EventType.INFO:
+            logger.info(self._event_value(event, "msg", str(event)))
+        elif kind == EventType.WARNING:
+            logger.warning(self._event_value(event, "msg", str(event)))
+        elif kind == EventType.ERROR:
+            logger.error(self._event_value(event, "msg", str(event)))
 
     async def stop(self) -> None:
         self._running = False
         logger.info("Остановка канала DeltaChat...")
+        await asyncio.sleep(0)
 
     async def send(self, msg: OutboundMessage) -> None:
         try:
-            # send_text - метод Chat, а не DeltaChat. Получаем чат по ID.
+            if self._account is None:
+                raise RuntimeError("DeltaChat аккаунт не инициализирован")
             chat = self._account.get_chat_by_id(int(msg.chat_id))
             chat.send_text(msg.content)
             logger.info(f"Сообщение отправлено в чат {msg.chat_id}")
