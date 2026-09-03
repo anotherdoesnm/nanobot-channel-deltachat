@@ -1,81 +1,80 @@
-**nanobot-channel-deltachat**
+# nanobot-channel-deltachat
 
-A channel plugin for [nanobot](https://github.com/HKUDS/nanobot) that lets you chat with your AI agent through [Delta Chat](https://delta.chat/).
+A [Delta Chat](https://delta.chat/) channel for [nanobot](https://github.com/HKUDS/nanobot) that lets you chat with your AI agent over email/IMAP.
 
-Uses email as transport: full privacy, no lock-in to a specific messenger, and decentralization.
+Since nanobot 0.3.0 there is no external channel-plugin path: a channel must be a self-contained package physically inside `nanobot/channels/<channel>/`. This repo is the canonical source of that channel package, and `patch_nanobot.py` builds a nanobot fork with it baked in.
 
-## 📋 Features
+## How it works
 
-- Sending and receiving text messages.
-- Full support for nanobot's plugin architecture (Pydantic configuration, `allow_from`).
-- Proper integration with nanobot's async event loop.
-- Bot nickname support.
+`patch_nanobot.py` copies the nanobot source plus this channel into a fresh directory, patches `pyproject.toml` so the Delta Chat runtime dependencies are pulled in, and can install the result via `uv tool install` — the same way the original nanobot is installed.
 
-## 📦 Dependencies
+## Build the fork
+
+`patch_nanobot.py` takes the nanobot checkout and the output directory as arguments. The channel package lives in this repo next to the script, so there is nothing else to configure:
 
 ```bash
-pip install deltachat-rpc-server deltachat-rpc-client
+# from this repo
+uv run patch_nanobot.py /path/to/nanobot /path/to/patched-nanobot
+uv run patch_nanobot.py /path/to/nanobot /path/to/patched-nanobot --install  # also `uv tool install`
 ```
 
-## 🚀 Installation
+The build uses the standard `uv tool install` flow; the WebUI is built from the bundled source during install.
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-username/nanobot-channel-deltachat.git
-   cd nanobot-channel-deltachat
-   ```
+## Install and run
 
-2. Install the plugin in development mode:
-   ```bash
-   pip install -e .
-   ```
+```bash
+uv run patch_nanobot.py /path/to/nanobot /path/to/patched-nanobot --install
+nanobot plugins list     # verify "Delta Chat" appears as a channel
+nanobot gateway
+```
 
-3. Verify that nanobot sees the plugin:
-   ```bash
-   nanobot plugins list
-   ```
+To install a previously built fork without re-patching:
 
-## ⚙️ Configuration
+```bash
+uv tool install /path/to/nanobot-with-deltachat
+```
 
-Add the following block to `~/.nanobot/config.json`:
+## Configuration
+
+In `~/.nanobot/config.json`:
 
 ```json
 {
   "channels": {
     "deltachat": {
       "enabled": true,
-      "email": "your-bot@example.com",
-      "password": "your-app-password",
-      "display_name": "Nanobot AI",
-      "allow_from": ["*"],
-      "db_dir": "~/.nanobot/deltachat_db"
+      "accountUrl": "DCACCOUNT://nine.testrun.org",
+      "dbDir": "~/.nanobot/dc_channel",
+      "displayName": "Nanobot AI",
+      "allowFrom": ["*"],
+      "streaming": true
     }
   }
 }
 ```
 
-*Use an App Password, not your main email password.*
+- `accountUrl` is a `DCACCOUNT://` URL (e.g. `DCACCOUNT://nine.testrun.org`). The account is created automatically from it via `account.add_transport_from_qr(...)` — there is no email/password configuration anymore.
+- `dbDir` stores the Delta Chat account. If omitted, data lives in `~/.nanobot/dc_channel/`; an explicit path is expanded via `~`. Restarts reuse the persisted account instead of creating a new one. To force a fresh account, delete the directory (default `~/.nanobot/dc_channel`).
+- `streaming` (default `true`) enables nanobot's streamed delivery. Turn it off to get each reply as one whole message instead of being updated in place.
 
-## 🏃 Running
+## Streaming
 
-1. Start the gateway:
-   ```bash
-   nanobot gateway
-   ```
+Progress messages and tool-call hints arrive as separate whole messages. Model
+reasoning and the streamed answer text are delivered as a **single message that
+the bot keeps updating in place** via Delta Chat message editing (`send_edit_request`
+— the client shows such messages as "edited"). Chunks are accumulated and an edit
+is pushed at most once every 2 seconds; on stream end the full text is written
+regardless of timing. A new message starts whenever the content type changes
+(reasoning → tool call → answer).
 
-2. An invite link will appear in the logs:
-   ```
-   📋 Bot invite link: https://i.delta.chat/#...
-   ```
+## First run
 
-3. Copy it and paste into Delta Chat via **"New contact" → "Invite by link"**.
+The invite link is logged once at startup. Copy it into Delta Chat via **New contact → Invite by link** before restarting the bot, otherwise the link becomes invalid.
 
-> *Note: Don't restart the bot before adding it via the invite link, otherwise the link will become invalid.*
+## Development
 
-## 🛠 Development
+Code changes take effect after restarting `nanobot gateway`. Re-run `patch_nanobot.py` only when the manifest, runtime dependencies, or `pyproject.toml` change.
 
-Thanks to the `-e` flag, code changes take effect immediately after restarting `nanobot gateway`. Reinstallation is only needed when modifying `pyproject.toml`.
-
----
-
-*Thanks to Zhipu.AI and GLM.*
+- Syntax check: `uv run python -m py_compile nanobot_channel_deltachat/*.py`
+- Lint: `ruff check nanobot_channel_deltachat/` (config in `pyproject.toml`; ruff is not a project dependency — install it separately, e.g. `uv tool install ruff`)
+- Tests (inside the fork): `uv run pytest nanobot/channels/deltachat/tests -q`
