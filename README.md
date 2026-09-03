@@ -21,7 +21,7 @@ pip install deltachat-rpc-server deltachat-rpc-client
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/anotherdoesnm/nanobot-channel-deltachat.git
+   git clone https://github.com/your-username/nanobot-channel-deltachat.git
    cd nanobot-channel-deltachat
    ```
 
@@ -34,11 +34,6 @@ pip install deltachat-rpc-server deltachat-rpc-client
    ```bash
    nanobot plugins list
    ```
-### Installing to pipx package nanobot-ai
-
-```bash
-pipx inject nanobot-ai "git+https://github.com/anotherdoesnm/nanobot-channel-deltachat.git" && nanobot plugins list
-```
 
 ## ⚙️ Configuration
 
