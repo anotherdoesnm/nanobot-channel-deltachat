@@ -1,24 +1,34 @@
-import asyncio
-from typing import Any, Optional
-from loguru import logger
-from pydantic import Field
-import os
-from nanobot.channels.base import BaseChannel
-from nanobot.bus.events import OutboundMessage
-from nanobot.bus.queue import MessageBus
-from nanobot.config.schema import Base
+"""Delta Chat channel implementation using the deltachat-rpc-client SDK."""
 
-from deltachat_rpc_client import Rpc, DeltaChat, EventType
+import asyncio
+from pathlib import Path
+from typing import Any, Optional
+
+from deltachat_rpc_client import DeltaChat, EventType, Rpc
+from loguru import logger
+from nanobot.bus.events import OutboundMessage
+from nanobot.bus.outbound_events import ProgressEvent
+from nanobot.bus.queue import MessageBus
+from nanobot.channels.base import BaseChannel
+from nanobot.config.paths import get_runtime_subdir
+from nanobot.config.schema import Base
+from pydantic import Field
+
+from .chat_stream import ChatStreamController
+
+# Интервал (сек) между обновлениями стримового сообщения через editMessage.
+STREAM_THROTTLE_S = 2.0
 
 
 class DeltaChatConfig(Base):
     """Конфигурация для канала DeltaChat."""
+
     enabled: bool = False
-    email: str = ""
-    password: str = ""
+    account_url: str = ""
     allow_from: list[str] = Field(default_factory=list)
-    db_dir: str = "deltachat_db"
+    db_dir: str = ""  # По умолчанию: ~/.nanobot/dc_channel/
     display_name: str = "nanobot"
+    streaming: bool = True
 
 
 class DeltaChatChannel(BaseChannel):
@@ -35,6 +45,7 @@ class DeltaChatChannel(BaseChannel):
         self._account = None
         self._account_id: Optional[int] = None
         self._running = False
+        self._stream_controller: Optional[ChatStreamController] = None
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
@@ -44,33 +55,32 @@ class DeltaChatChannel(BaseChannel):
         """Запускает DeltaChat аккаунт и начинает слушать входящие сообщения."""
         self._running = True
 
-        if not self.config.email or not self.config.password:
-            raise ValueError("Отсутствуют учетные данные DeltaChat")
+        if not self.config.account_url:
+            raise ValueError("Отсутствует accountUrl DeltaChat")
 
         try:
-
-            # Create RPC with explicit executable path
-            self._rpc = Rpc(
-                accounts_dir=os.path.expanduser(self.config.db_dir)
-            )
-            
-            # Start the RPC server
+            if self.config.db_dir:
+                accounts_dir = Path(self.config.db_dir).expanduser()
+            else:
+                accounts_dir = get_runtime_subdir("dc_channel")
+            self._rpc = Rpc(accounts_dir=str(accounts_dir))
             self._rpc.start()
             self._dc = DeltaChat(self._rpc)
 
             accounts = self._dc.get_all_accounts()
-            self._account = self._select_account(accounts)
-            if self._account is None:
-                self._account = self._dc.add_account()
+            self._account = accounts[0] if accounts else self._dc.add_account()
 
             self._account_id = self._account.id
+            self._stream_controller = ChatStreamController(
+                create_message=self._create_dc_message,
+                edit_message=self._edit_dc_message,
+                throttle_s=STREAM_THROTTLE_S,
+            )
             if not self._account.is_configured():
-                self._account.set_config("addr", self.config.email)
-                self._account.set_config("mail_pw", self.config.password)
                 self._account.set_config("bot", "1")
                 if self.config.display_name:
                     self._account.set_config("displayname", self.config.display_name)
-                self._account.configure()
+                self._account.add_transport_from_qr(self.config.account_url)
 
             self._account.bring_online()
             try:
@@ -78,7 +88,7 @@ class DeltaChatChannel(BaseChannel):
                 logger.info(f"Ссылка-приглашение для бота: {invite_link}")
             except Exception as qr_err:
                 logger.warning(f"Не удалось получить invite-ссылку: {qr_err}")
-            logger.info(f"Аккаунт {self.config.email} успешно настроен")
+            logger.info("Аккаунт DeltaChat успешно настроен")
             await self._start_event_loop()
 
         except Exception as e:
@@ -86,24 +96,12 @@ class DeltaChatChannel(BaseChannel):
             raise
         finally:
             self._running = False
-            # Clean up RPC connection
             if self._rpc:
                 self._rpc.close()
                 self._rpc = None
             self._dc = None
             self._account = None
             self._account_id = None
-
-    def _select_account(self, accounts: list[Any]) -> Optional[Any]:
-        if not accounts:
-            return None
-        for account in accounts:
-            try:
-                if account.get_config("addr") == self.config.email:
-                    return account
-            except Exception:
-                continue
-        return accounts[0]
 
     @staticmethod
     def _event_value(event: Any, key: str, default: Any = None) -> Any:
@@ -161,12 +159,73 @@ class DeltaChatChannel(BaseChannel):
         logger.info("Остановка канала DeltaChat...")
         await asyncio.sleep(0)
 
+    def _create_dc_message(self, chat_id: str, content: str) -> int:
+        if self._account is None:
+            raise RuntimeError("DeltaChat аккаунт не инициализирован")
+        chat = self._account.get_chat_by_id(int(chat_id))
+        msg = chat.send_text(content)
+        logger.info(f"Сообщение отправлено в чат {chat_id}")
+        return int(msg.id)
+
+    def _edit_dc_message(self, chat_id: str, msg_id: int, content: str) -> None:
+        if self._rpc is None or self._account_id is None:
+            raise RuntimeError("DeltaChat канал не инициализирован")
+        self._rpc.send_edit_request(self._account_id, msg_id, content)
+        logger.info(f"Сообщение {msg_id} обновлено в чате {chat_id}")
+
+    def _require_stream_controller(self) -> ChatStreamController:
+        if self._stream_controller is None:
+            raise RuntimeError("DeltaChat канал не инициализирован")
+        return self._stream_controller
+
     async def send(self, msg: OutboundMessage) -> None:
-        try:
-            if self._account is None:
-                raise RuntimeError("DeltaChat аккаунт не инициализирован")
-            chat = self._account.get_chat_by_id(int(msg.chat_id))
-            chat.send_text(msg.content)
-            logger.info(f"Сообщение отправлено в чат {msg.chat_id}")
-        except Exception as e:
-            logger.error(f"Ошибка отправки сообщения: {e}")
+        controller = self._require_stream_controller()
+        event = msg.event
+        if isinstance(event, ProgressEvent):
+            if event.reasoning or event.reasoning_delta or event.reasoning_end:
+                return
+            kind = "tool" if event.tool_hint else "progress"
+        else:
+            kind = "answer"
+        if not msg.content:
+            return
+        await controller.on_whole(msg.chat_id, kind, msg.content)
+
+    async def send_delta(
+        self,
+        chat_id: str,
+        delta: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        stream_id: str | None = None,
+        stream_end: bool = False,
+        resuming: bool = False,
+        merge_next: bool = False,
+    ) -> None:
+        controller = self._require_stream_controller()
+        if delta:
+            await controller.on_stream(chat_id, "answer", delta)
+        if stream_end:
+            await controller.on_stream_end(chat_id, "answer", merge_next=merge_next)
+
+    async def send_reasoning_delta(
+        self,
+        chat_id: str,
+        delta: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        stream_id: str | None = None,
+    ) -> None:
+        controller = self._require_stream_controller()
+        if delta:
+            await controller.on_stream(chat_id, "reasoning", delta)
+
+    async def send_reasoning_end(
+        self,
+        chat_id: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        stream_id: str | None = None,
+    ) -> None:
+        controller = self._require_stream_controller()
+        await controller.on_stream_end(chat_id, "reasoning")

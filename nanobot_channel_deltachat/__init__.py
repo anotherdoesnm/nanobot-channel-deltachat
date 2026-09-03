@@ -1,4 +1,1 @@
-from nanobot_channel_deltachat.channel import DeltaChatChannel
-
-__all__ = ["DeltaChatChannel"]
-
+"""Delta Chat channel package for nanobot."""
